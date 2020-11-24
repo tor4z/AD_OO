@@ -5,6 +5,7 @@ python:
 
 script:
     - pip install tox
+    - tox
 
 notifications:
 email: false
