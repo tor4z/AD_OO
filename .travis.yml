@@ -4,7 +4,7 @@ python:
     - 3.8
 
 script:
-    - tox
+    - pip install tox
 
 notifications:
 email: false
