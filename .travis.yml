@@ -5,7 +5,7 @@ python:
 
 script:
     - pip install tox
-    - tox
+    - tox -e coverage, flake8
 
 notifications:
 email: false

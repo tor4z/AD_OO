@@ -18,7 +18,8 @@ class Node(object):
 
     def set_inputs(self, nodes):
         if isinstance(nodes, Iterable):
-            pass
+            for node in nodes:
+                self.set_input(node)
 
     def set_input(self, node):
         self._input_nodes.append(node)
@@ -34,7 +35,7 @@ class Node(object):
 
 
 class Variable(Node):
-    def __init__(self):
+    def __init__(self, value, name):
         pass
 
 
@@ -64,8 +65,8 @@ class PlaceHolder(Node):
 
 
 class Op(Node):
-    def __init__(self):
-        pass
+    def __init__(self, name=None):
+        super().__init__(name)
 
     def eval(self, *args, **kwds):
         raise NotImplementedError
@@ -76,7 +77,14 @@ class Op(Node):
 
 class Add(Op):
     def __init__(self, *input_nodes):
-        pass
+        name = 'add('
+        for node in input_nodes:
+            name += node.name + ','
+        name = name[:-1]    # drop last ','
+        name += ')'
+
+        super().__init__(name)
+        self.set_inputs(input_nodes)
 
     def eval(self):
         pass
