@@ -1,7 +1,7 @@
-from .ops import Constant, Variable
+from .ops import Constant, Variable, Add
 
 
-__all__ = ['constant', 'variable']
+__all__ = ['constant', 'variable', 'add']
 
 
 def constant(value, name=None):
@@ -10,3 +10,7 @@ def constant(value, name=None):
 
 def variable(value, name=None):
     return Variable(value, name)
+
+
+def add(*nodes):
+    return Add(*nodes)
