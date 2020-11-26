@@ -84,10 +84,16 @@ class Node(object):
             error.GradValueError(
                 f'Node({node.name}) is not a input of operation {self.name}')
 
+    def self_grad(self):
+        if self._grad is None:
+            if self._output_nodes:
+                for node in self._output_nodes:
+                    self._grad = Add(self._grad, node)
+            else:
+                self.set_root_grad()
+
     def grad(self, *wrt):
-        if not self._output_nodes:
-            # root
-            self.set_root_grad()
+        raise NotImplementedError
 
     def __str__(self):
         return f'<Node({self.name})>'
@@ -187,7 +193,7 @@ class Operator(Node):
         return self.eval()
 
     def grad(self, *wrt):
-        super().grad(*wrt)
+        raise NotImplementedError
 
 
 class List(Operator):
@@ -230,11 +236,7 @@ class Add(Operator):
         return self
 
     def grad(self, *wrt):
-        super().grad(*wrt)
-        if self._grad is None:
-            for node in self._output_nodes:
-                self._grad = Add(self._grad, node)
-
+        self.self_grad()
         output = []
         for node in wrt:
             if node in self._input_nodes:
@@ -243,8 +245,13 @@ class Add(Operator):
                 one.set_grad_ref(node)
                 output.append(one)
             else:
-                raise error.GradValueError(
-                    f'Node({node.name}) is not a input of {self.name}')
+                if self._input_nodes:
+                    for input_node in self._input_nodes:
+                        grad = input_node.grad(node)
+                        output.append(grad)
+                else:
+                    raise error.GradValueError(
+                        f'Can not found Node({node.name}) in the graph.')
 
         if len(output) == 1:
             return output[0]
