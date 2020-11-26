@@ -2,7 +2,8 @@ from .ops import *      # noqa: F403
 
 
 __all__ = ['constant', 'variable', 'add', 'neg',
-           'minus', 'mul', 'div', 'pow', 'log']
+           'minus', 'mul', 'div', 'pow', 'log',
+           'ones', 'zeros']
 
 
 def constant(value, name=None):
@@ -39,3 +40,11 @@ def pow(*nodes):
 
 def log(node):
     return Log(node)        # noqa: F405
+
+
+def ones(node):
+    return Ones(node)        # noqa: F405
+
+
+def zeros(node):
+    return Zeros(node)        # noqa: F405

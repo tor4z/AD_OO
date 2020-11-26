@@ -4,7 +4,7 @@ import ad
 
 def test_session_default_graph():
     sess = ad.Session()
-    assert sess.graph is not None
+    assert sess._graph_set is not None
 
 
 def test_session_graph():

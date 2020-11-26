@@ -1,10 +1,11 @@
 import math
+import time
 from collections.abc import Iterable
 from . import error
 
 
 __all__ = ['Constant', 'Variable', 'Node', 'Add', 'Minus',
-           'Mul', 'Neg', 'Div', 'Pow', 'Log']
+           'Mul', 'Neg', 'Div', 'Pow', 'Log', 'Ones', 'Zeros']
 
 
 class Node(object):
@@ -17,8 +18,11 @@ class Node(object):
 
         self.value = None
         self.name = name
+        self._grad = None
+        self._hash = None
         self._input_nodes = []
         self._output_nodes = []
+        self._grad_ref_nodes = []
 
     def eval(self, *args, **kwds):
         raise NotImplementedError
@@ -26,19 +30,22 @@ class Node(object):
     def __call__(self):
         return self.eval()
 
-    def set_inputs(self, nodes):
-        if isinstance(nodes, Iterable):
-            for node in nodes:
-                self.set_input(node)
-        else:
-            self.set_input(nodes)
+    def __eq__(self, node):
+        return self.name == node.name and\
+            self.value == node.value
 
-    def set_outputs(self, nodes):
-        if isinstance(nodes, Iterable):
-            for node in nodes:
-                self.set_output(node)
-        else:
-            self.set_output(nodes)
+    def __hash__(self):
+        if self._hash is None:
+            self._hash = hash(self.name + str(time.time()))
+        return self._hash
+
+    def set_inputs(self, *nodes):
+        for node in nodes:
+            self.set_input(node)
+
+    def set_outputs(self, *nodes):
+        for node in nodes:
+            self.set_output(node)
 
     def set_input(self, node):
         if not isinstance(node, Node):
@@ -56,8 +63,31 @@ class Node(object):
             self._output_nodes.append(node)
             node.set_input(self)
 
-    def grad(self):
-        pass
+    def set_grad_refs(self, *nodes):
+        for node in nodes:
+            self.set_grad_ref(node)
+
+    def set_grad_ref(self, node):
+        # just for grad
+        if not isinstance(node, Node):
+            raise ValueError('A Node is required.')
+
+        if node not in self._grad_ref_nodes:
+            self._grad_ref_nodes.append(node)
+            node.set_grad_ref(self)
+
+    def set_root_grad(self):
+        self._grad = Ones(f'Grad({self.name})')
+
+    def grad_wrt_check(self, node):
+        if node not in self._input_nodes:
+            error.GradValueError(
+                f'Node({node.name}) is not a input of operation {self.name}')
+
+    def grad(self, *wrt):
+        if not self._output_nodes:
+            # root
+            self.set_root_grad()
 
     def __str__(self):
         return f'<Node({self.name})>'
@@ -82,7 +112,7 @@ class Variable(Node):
         return self
 
     def grad(self):
-        pass
+        raise NotImplementedError
 
 
 class Constant(Node):
@@ -96,7 +126,17 @@ class Constant(Node):
         return self
 
     def grad(self):
-        pass
+        raise NotImplementedError
+
+
+class Ones(Constant):
+    def __init__(self, name):
+        super().__init__(value=1, name=name)
+
+
+class Zeros(Constant):
+    def __init__(self, name):
+        super().__init__(value=0, name=name)
 
 
 class PlaceHolder(Node):
@@ -118,21 +158,22 @@ class PlaceHolder(Node):
                 f'Key {self.name} not found in feed_dict.')
 
     def grad(self):
-        pass
+        raise NotImplementedError
 
 
 class Operator(Node):
     def __init__(self, *input_nodes):
         name = self.generate_name(*input_nodes)
         super().__init__(name)
-        self.set_inputs(input_nodes)
+        self.set_inputs(*input_nodes)
 
     @classmethod
     def generate_name(cls, *input_nodes):
         name = f'{cls.__name__.lower()}('
         if isinstance(input_nodes, Iterable):
             for node in input_nodes:
-                name += node.name + ','
+                if node is not None:
+                    name += node.name + ','
             name = name[:-1]    # drop ','
         else:
             name += input_nodes.name
@@ -145,8 +186,36 @@ class Operator(Node):
     def __call__(self, *args, **kwds):
         return self.eval()
 
-    def grad(self):
-        pass
+    def grad(self, *wrt):
+        super().grad(*wrt)
+
+
+class List(Operator):
+    def __init__(self, *input_nodes):
+        super().__init__(*input_nodes)
+
+    def eval(self):
+        output = []
+        for node in self._input_nodes:
+            output.append(node.eval())
+        return iter(output)
+
+    def __iter__(self):
+        return self.eval()
+
+
+class Tuple(Operator):
+    def __init__(self, *input_nodes):
+        super().__init__(*input_nodes)
+
+    def eval(self):
+        output = []
+        for node in self._input_nodes:
+            output.append(node.eval())
+        return iter(output)
+
+    def __iter__(self):
+        return self.eval()
 
 
 class Add(Operator):
@@ -156,11 +225,31 @@ class Add(Operator):
     def eval(self):
         self.value = 0.0
         for node in self._input_nodes:
-            self.value += node.eval().value
+            if node is not None:
+                self.value += node.eval().value
         return self
 
-    def grad(self):
-        pass
+    def grad(self, *wrt):
+        super().grad(*wrt)
+        if self._grad is None:
+            for node in self._output_nodes:
+                self._grad = Add(self._grad, node)
+
+        output = []
+        for node in wrt:
+            if node in self._input_nodes:
+                grad_name = f'Grad({node.name})'
+                one = Mul(Ones(grad_name), self._grad)
+                one.set_grad_ref(node)
+                output.append(one)
+            else:
+                raise error.GradValueError(
+                    f'Node({node.name}) is not a input of {self.name}')
+
+        if len(output) == 1:
+            return output[0]
+        else:
+            return Tuple(*output)
 
 
 class Neg(Operator):
@@ -171,8 +260,22 @@ class Neg(Operator):
         self.value = -1 * self._input_nodes[0].value
         return self
 
-    def grad(self):
-        pass
+    def grad(self, *wrt):
+        output = []
+        for node in wrt:
+            if node in self._input_nodes:
+                grad_name = f'Grad({node.name})'
+                one = Ones(grad_name) * self._grad * -1
+                one.set_grad_ref(node)
+                output.append(one)
+            else:
+                raise error.GradValueError(
+                    f'Node({node.name}) is not a input of {self.name}')
+
+        if len(output) == 1:
+            return output[0]
+        else:
+            return Tuple(*output)
 
 
 class Minus(Operator):
@@ -187,8 +290,27 @@ class Minus(Operator):
         self.value = first_node.value - second_node.value
         return self
 
-    def grad(self):
-        pass
+    def grad(self, *wrt):
+        output = []
+        for node in wrt:
+            if node in self._input_nodes:
+                if node == self._input_nodes[0]:
+                    sign = 1
+                else:
+                    sign = -1
+
+                grad_name = f'Grad({node.name})'
+                one = Ones(grad_name) * self._grad * sign
+                one.set_grad_ref(node)
+                output.append(one)
+            else:
+                raise error.GradValueError(
+                    f'Node({node.name}) is not a input of {self.name}')
+
+        if len(output) == 1:
+            return output[0]
+        else:
+            return Tuple(*output)
 
 
 class Mul(Operator):
@@ -198,11 +320,22 @@ class Mul(Operator):
     def eval(self):
         self.value = 1.0
         for node in self._input_nodes:
-            self.value *= node.eval().value
+            if node in self._input_nodes:
+                self.value *= node.eval().value
+            else:
+                pass
         return self
 
-    def grad(self):
-        pass
+    def grad(self, *wrt):
+        output = []
+        for node in wrt:
+            grad_name = f'Grad({node.name})'
+            output.append(Ones(grad_name))
+
+        if len(output) == 1:
+            return output[0]
+        else:
+            return Tuple(*output)
 
 
 class Div(Operator):
