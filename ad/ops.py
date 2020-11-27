@@ -5,7 +5,8 @@ from . import error
 
 
 __all__ = ['Constant', 'Variable', 'Node', 'Add', 'Minus',
-           'Mul', 'Neg', 'Div', 'Pow', 'Log', 'Ones', 'Zeros']
+           'Mul', 'Neg', 'Div', 'Pow', 'Log', 'Reciprocal',
+           'Ones', 'Zeros']
 
 
 class Node(object):
@@ -31,8 +32,7 @@ class Node(object):
         return self.eval()
 
     def __eq__(self, node):
-        return self.name == node.name and\
-            self.value == node.value
+        return self.__hash__ == node.__hash__
 
     def __hash__(self):
         if self._hash is None:
@@ -92,8 +92,29 @@ class Node(object):
             else:
                 self.set_root_grad()
 
-    def grad(self, *wrt):
+    def eval_grad(self, wrt):
         raise NotImplementedError
+
+    def grad(self, *wrt):
+        self.self_grad()
+        output = []
+        for node in wrt:
+            if node in self._input_nodes:
+                grad_node = self.eval_grad(node)
+                output.append(grad_node)
+            else:
+                if self._input_nodes:
+                    for input_node in self._input_nodes:
+                        grad = input_node.grad(node)
+                        output.append(grad)
+                else:
+                    raise error.GradValueError(
+                        f'Can not found Node({node.name}) in the graph.')
+
+        if len(output) == 1:
+            return output[0]
+        else:
+            return Tuple(*output)
 
     def __str__(self):
         return f'<Node({self.name})>'
@@ -136,12 +157,12 @@ class Constant(Node):
 
 
 class Ones(Constant):
-    def __init__(self, name):
+    def __init__(self, name=None):
         super().__init__(value=1, name=name)
 
 
 class Zeros(Constant):
-    def __init__(self, name):
+    def __init__(self, name=None):
         super().__init__(value=0, name=name)
 
 
@@ -192,9 +213,6 @@ class Operator(Node):
     def __call__(self, *args, **kwds):
         return self.eval()
 
-    def grad(self, *wrt):
-        raise NotImplementedError
-
 
 class List(Operator):
     def __init__(self, *input_nodes):
@@ -235,28 +253,11 @@ class Add(Operator):
                 self.value += node.eval().value
         return self
 
-    def grad(self, *wrt):
-        self.self_grad()
-        output = []
-        for node in wrt:
-            if node in self._input_nodes:
-                grad_name = f'Grad({node.name})'
-                one = Mul(Ones(grad_name), self._grad)
-                one.set_grad_ref(node)
-                output.append(one)
-            else:
-                if self._input_nodes:
-                    for input_node in self._input_nodes:
-                        grad = input_node.grad(node)
-                        output.append(grad)
-                else:
-                    raise error.GradValueError(
-                        f'Can not found Node({node.name}) in the graph.')
-
-        if len(output) == 1:
-            return output[0]
-        else:
-            return Tuple(*output)
+    def eval_grad(self, wrt):
+        grad_name = f'Grad({wrt.name})'
+        grad_node = Mul(Ones(grad_name), self._grad)
+        grad_node.set_grad_ref(wrt)
+        return grad_node
 
 
 class Neg(Operator):
@@ -267,22 +268,12 @@ class Neg(Operator):
         self.value = -1 * self._input_nodes[0].value
         return self
 
-    def grad(self, *wrt):
-        output = []
-        for node in wrt:
-            if node in self._input_nodes:
-                grad_name = f'Grad({node.name})'
-                one = Ones(grad_name) * self._grad * -1
-                one.set_grad_ref(node)
-                output.append(one)
-            else:
-                raise error.GradValueError(
-                    f'Node({node.name}) is not a input of {self.name}')
-
-        if len(output) == 1:
-            return output[0]
-        else:
-            return Tuple(*output)
+    def eval_grad(self, wrt):
+        grad_name = f'Grad({wrt.name})'
+        neg_sign = Constant(-1, 'Neg_sgn')
+        grad_node = Mul(Ones(grad_name), self._grad, neg_sign)
+        grad_node.set_grad_ref(wrt)
+        return grad_node
 
 
 class Minus(Operator):
@@ -297,27 +288,15 @@ class Minus(Operator):
         self.value = first_node.value - second_node.value
         return self
 
-    def grad(self, *wrt):
-        output = []
-        for node in wrt:
-            if node in self._input_nodes:
-                if node == self._input_nodes[0]:
-                    sign = 1
-                else:
-                    sign = -1
-
-                grad_name = f'Grad({node.name})'
-                one = Ones(grad_name) * self._grad * sign
-                one.set_grad_ref(node)
-                output.append(one)
-            else:
-                raise error.GradValueError(
-                    f'Node({node.name}) is not a input of {self.name}')
-
-        if len(output) == 1:
-            return output[0]
+    def eval_grad(self, wrt):
+        grad_name = f'Grad({wrt.name})'
+        if wrt == self._input_nodes[0]:
+            sign = Constant(1, 'sign')
         else:
-            return Tuple(*output)
+            sign = Constant(-1, 'sign')
+        grad_node = Mul(Ones(grad_name), self._grad, sign)
+        grad_node.set_grad_ref(wrt)
+        return grad_node
 
 
 class Mul(Operator):
@@ -327,22 +306,19 @@ class Mul(Operator):
     def eval(self):
         self.value = 1.0
         for node in self._input_nodes:
-            if node in self._input_nodes:
-                self.value *= node.eval().value
-            else:
-                pass
+            self.value *= node.eval().value
         return self
 
-    def grad(self, *wrt):
-        output = []
-        for node in wrt:
-            grad_name = f'Grad({node.name})'
-            output.append(Ones(grad_name))
+    def eval_grad(self, wrt):
+        grad_name = f'Grad({wrt.name})'
+        grad_node = Ones(grad_name)
+        for node in self._input_nodes:
+            if node != wrt:
+                grad_node = Mul(grad_node, node)
 
-        if len(output) == 1:
-            return output[0]
-        else:
-            return Tuple(*output)
+        grad_node = Mul(grad_node, self._grad)
+        grad_node.set_grad_ref(wrt)
+        return grad_node
 
 
 class Div(Operator):
@@ -352,17 +328,36 @@ class Div(Operator):
         super().__init__(*input_nodes)
 
     def eval(self):
-        first_node = self._input_nodes[0]
-        second_node = self._input_nodes[1]
+        numerator_node = self._input_nodes[0]
+        denominator_node = self._input_nodes[1]
 
-        if second_node.value == 0:
+        if denominator_node.value == 0:
             raise ValueError('Denominator is 0')
 
-        self.value = first_node.value / second_node.value
+        self.value = numerator_node.value / denominator_node.value
         return self
 
-    def grad(self):
-        pass
+    def eval_grad(self, wrt):
+        grad_name = f'Grad({wrt.name})'
+
+        numerator_node = self._input_nodes[0]
+        denominator_node = self._input_nodes[1]
+
+        if wrt == numerator_node:
+            # Fix me
+            grad_node = Constant(1 / denominator_node.value, grad_name)
+        elif wrt == denominator_node:
+            grad_node = Constant(numerator_node.value, grad_name)
+            grad_node = Mul(grad_node, Constant(-1, 'sign'))
+            grad_node = Div(
+                grad_node, Pow(denominator_node, Constant(2, 'pow')))
+        else:
+            raise error.GradValueError(
+                f'{wrt.name} is neither numerator nor denominator')
+
+        grad_node = Mul(grad_node, self._grad)
+        grad_node.set_grad_ref(wrt)
+        return grad_node
 
 
 class Pow(Operator):
@@ -378,8 +373,25 @@ class Pow(Operator):
         self.value = first_node.value ** second_node.value
         return self
 
-    def grad(self):
-        pass
+    def eval_grad(self, wrt):
+        grad_name = f'Grad({wrt.name})'
+        base_node = self._input_nodes[0]
+        power_node = self._input_nodes[1]
+
+        if wrt == base_node:
+            grad_node = Mul(
+                power_node, Pow(base_node, Minus(power_node, Ones())))
+        elif wrt == power_node:
+            grad_node = self
+            grad_node.name = grad_name
+            grad_node = Mul(grad_node, Log(base_node))
+        else:
+            raise error.GradValueError(
+                f'{wrt.name} is neither base nor power')
+
+        grad_node = Mul(grad_node, self._grad)
+        grad_node.set_grad_ref(wrt)
+        return grad_node
 
 
 class Log(Operator):
@@ -391,6 +403,16 @@ class Log(Operator):
         if node.value <= 0:
             raise ValueError('Negtive value for log.')
         self.value = math.log(node.value)
+        return self
 
-    def grad(self):
-        pass
+    def eval_grad(self, wrt):
+        grad_name = f'Grad({wrt.name})'
+        grad_node = Constant(1 / wrt.value, grad_name)
+        grad_node.set_grad_ref(wrt)
+        return grad_node
+
+
+class Reciprocal(Div):
+    def __init__(self, input_node):
+        one = Ones('numerator')
+        super().__init__(one, input_node)

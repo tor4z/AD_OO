@@ -3,7 +3,7 @@ from .ops import *      # noqa: F403
 
 __all__ = ['constant', 'variable', 'add', 'neg',
            'minus', 'mul', 'div', 'pow', 'log',
-           'ones', 'zeros']
+           'ones', 'zeros', 'reciprocal']
 
 
 def constant(value, name=None):
@@ -48,3 +48,7 @@ def ones(node):
 
 def zeros(node):
     return Zeros(node)        # noqa: F405
+
+
+def reciprocal(node):
+    return Reciprocal(node)   # noqa: F405

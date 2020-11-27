@@ -125,3 +125,17 @@ def test_session_log():
         c_out = sess.run(c)
 
     assert c_out.value == c_true.value
+
+
+def test_session_reciprocal():
+    a = ad.constant(3, 'a')
+    assert a.value == 3
+
+    c_true = ad.constant(1 / 3, 'c')
+    c = ad.reciprocal(a)   # build graph
+
+    with ad.Session() as sess:
+        # eval graph
+        c_out = sess.run(c)
+
+    assert c_out.value == c_true.value
