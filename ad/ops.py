@@ -1,7 +1,9 @@
 import math
 import time
 from collections.abc import Iterable
+from . import algorithms
 from . import error
+from .utils import flatten_iterable, find_node
 
 
 __all__ = ['Constant', 'Variable', 'Node', 'Add', 'Minus',
@@ -88,33 +90,58 @@ class Node(object):
         if self._grad is None:
             if self._output_nodes:
                 for node in self._output_nodes:
-                    self._grad = Add(self._grad, node)
+                    # Fix me
+                    if self._grad is None:
+                        self._grad = node
+                    else:
+                        self._grad = Add(self._grad, node)
             else:
                 self.set_root_grad()
 
     def eval_grad(self, wrt):
         raise NotImplementedError
 
-    def grad(self, *wrt):
+    def _node_grad(self, wrt):
         self.self_grad()
-        output = []
-        for node in wrt:
-            if node in self._input_nodes:
-                grad_node = self.eval_grad(node)
-                output.append(grad_node)
+
+        # dfs search wrt node
+        if find_node(wrt, self._input_nodes):
+            # Fix me
+            grad_node = self.eval_grad(wrt)
+            return grad_node
+        else:
+            if self._input_nodes:
+                for input_node in self._input_nodes:
+                    grad_node = input_node._node_grad(wrt)
+                    if grad_node is not None:
+                        return grad_node
             else:
-                if self._input_nodes:
-                    for input_node in self._input_nodes:
-                        grad = input_node.grad(node)
-                        output.append(grad)
-                else:
-                    raise error.GradValueError(
-                        f'Can not found Node({node.name}) in the graph.')
+                return None
+
+    def grad(self, *wrt):
+        wrt = flatten_iterable(wrt)
+        output = []
+
+        for node in wrt:
+            grad_node = self._node_grad(node)
+            if grad_node is not None:
+                output.append(grad_node)
 
         if len(output) == 1:
             return output[0]
         else:
             return Tuple(*output)
+
+    def trainable_parameters(self):
+        # current node as root
+        all_node = []
+        all_trainable_node = []
+        algorithms.dfs(self, all_node)
+
+        for node in all_node:
+            if isinstance(node, Variable):
+                all_trainable_node.append(node)
+        return all_trainable_node
 
     def __str__(self):
         return f'<Node({self.name})>'
@@ -138,9 +165,6 @@ class Variable(Node):
     def eval(self):
         return self
 
-    def grad(self):
-        raise NotImplementedError
-
 
 class Constant(Node):
     def __init__(self, value, name):
@@ -151,9 +175,6 @@ class Constant(Node):
 
     def eval(self):
         return self
-
-    def grad(self):
-        raise NotImplementedError
 
 
 class Ones(Constant):
@@ -224,6 +245,9 @@ class List(Operator):
             output.append(node.eval())
         return iter(output)
 
+    def __len__(self):
+        return len(self._input_nodes)
+
     def __iter__(self):
         return self.eval()
 
@@ -237,6 +261,9 @@ class Tuple(Operator):
         for node in self._input_nodes:
             output.append(node.eval())
         return iter(output)
+
+    def __len__(self):
+        return len(self._input_nodes)
 
     def __iter__(self):
         return self.eval()
